@@ -186,6 +186,24 @@ def get_extensions():
         torch_rpath.append(f"-Wl,-rpath,{torch_lib_dir}")
     is_rocm = getattr(torch.version, "hip", None) is not None
 
+    if getattr(torch.version, "maca", None) is not None:
+        # mcPyTorch's CUDAExtension/BuildExtension invokes cu-bridge for .cu
+        # sources. Keep the generic LogP implementation and bind only its symbols.
+        return [
+            GpuExtension(
+                name="rl_engine._C",
+                sources=[
+                    "csrc/maca/ops.cpp",
+                    "csrc/cuda/logprob/fused_logp_kernel.cu",
+                ],
+                extra_compile_args={
+                    "cxx": ["-O3", "-std=c++17", "-DKERNEL_ALIGN_WITH_MACA"],
+                    "nvcc": ["-O3", "-std=c++17", "-DKERNEL_ALIGN_WITH_MACA"],
+                },
+                extra_link_args=list(torch_rpath),
+            )
+        ]
+
     if _musa_build_available(torch):
         extensions.append(
             GpuExtension(

@@ -29,15 +29,21 @@ def is_musa_available() -> bool:
         return False
 
 
+def cuda_platform() -> str:
+    """Identify the vendor behind PyTorch's CUDA-facing device API."""
+    if getattr(torch.version, "hip", None) is not None:
+        return DeviceType.ROCM.value
+    if getattr(torch.version, "maca", None) is not None:
+        return DeviceType.MACA.value
+    return DeviceType.CUDA.value
+
+
 class DeviceContext:
     """
     Hardware-aware context manager for high-performance RL tasks.
 
-    Provides transparent support for AMD (ROCm/HIP), NVIDIA (CUDA) and Huawei
-    Ascend (NPU/CANN) architectures to ensure backend-agnostic scaling for RL
-    operators.
-    Provides transparent support for AMD (ROCm/HIP), NVIDIA (CUDA), and
-    Moore Threads (MUSA) architectures.
+    Identifies the vendor runtime separately from the PyTorch device interface
+    for CUDA, ROCm, MACA, MUSA, and Ascend devices.
     """
 
     def __init__(self):
@@ -49,6 +55,7 @@ class DeviceContext:
             self.device = torch.device(DeviceType.CPU.value)
         self.is_rocm = False
         self.is_musa = False
+        self.is_maca = False
         self.backend_version = "N/A"
         self.device_type = DeviceType.CPU.value
 
@@ -61,13 +68,22 @@ class DeviceContext:
                 f" (Version: {self.backend_version})"
             )
         elif self.device.type == DeviceType.CUDA.value:
-            # Distinct detection for AMD HIP and  NVIDIA CUDA
-            if hasattr(torch.version, "hip") and torch.version.hip is not None:
+            # Tensor device strings describe the API, not the GPU vendor.
+            platform = cuda_platform()
+            if platform == DeviceType.ROCM.value:
                 self.is_rocm = True
                 self.device_type = DeviceType.ROCM.value
                 self.backend_version = torch.version.hip
                 logger.info_once(
                     f"RL-Engine initialized with AMD ROCm backend (Version: {self.backend_version})"
+                )
+            elif platform == DeviceType.MACA.value:
+                self.is_maca = True
+                self.device_type = DeviceType.MACA.value
+                self.backend_version = torch.version.maca
+                logger.info_once(
+                    f"RL-Engine initialized with MetaX MACA backend"
+                    f" (Version: {self.backend_version})"
                 )
             else:
                 self.is_rocm = False

@@ -30,7 +30,7 @@ from rl_engine.contracts.operators.logprob import (
     LogprobRole,
     MaskMode,
 )
-from rl_engine.platforms.device import device_ctx
+from rl_engine.platforms.device import cuda_platform, device_ctx
 from rl_engine.runtime.semantic_registry import (
     OperatorBackendDescriptor,
     OperatorFallbackPolicy,
@@ -74,6 +74,7 @@ class OpBackend(Enum, metaclass=_KernelEnumMeta):
     CUDA_FUSED_LOGP_SM90 = "rl_engine.kernels.ops.cuda.loss.logp.FusedLogpSM90Op"
     CUDA_FUSED_LOGP_GENERIC = "rl_engine.kernels.ops.cuda.loss.logp.FusedLogpGenericOp"
     MUSA_FUSED_LOGP_GENERIC = "rl_engine.backends.musa.logprob.logp.MusaFusedLogpOp"
+    MACA_FUSED_LOGP_GENERIC = "rl_engine.backends.maca.logprob.logp.MacaFusedLogpOp"
     CUDA_DETERMINISTIC_LOGP = "rl_engine.kernels.ops.cuda.loss.logp.DeterministicLogpCUDAOp"
     # Deterministic standard-softmax attention (issue #147); not FlashAttention.
     CUDA_DETERMINISTIC_ATTENTION = (
@@ -210,6 +211,32 @@ class OpBackend(Enum, metaclass=_KernelEnumMeta):
 
 def _default_semantic_descriptors() -> tuple[OperatorBackendDescriptor, ...]:
     return (
+        OperatorBackendDescriptor(
+            semantic_op="selected_logprob",
+            backend_id="rlkernel.maca.fused_logp",
+            supported_targets=frozenset({"rollout", "training"}),
+            supported_devices=frozenset({"maca"}),
+            supported_dtypes=frozenset({"float32", "bfloat16", "float16"}),
+            supported_topologies={
+                "rollout": {
+                    "world_size": (1,),
+                    "tensor_parallel_size": (1,),
+                    "context_parallel_size": (1,),
+                },
+                "training": {"world_size": (1,), "sharding": ("unsharded",)},
+            },
+            determinism_or_alignment_properties={
+                "algorithm": "generic_selected_logprob_fp32_reduction",
+                "backward": "pytorch_fp32_softmax_vjp",
+                "strict_observable": True,
+            },
+            lifecycle=OperatorLifecycle.ENGINE_CONSTRUCTION,
+            implementation_class_or_factory=(
+                "rl_engine.backends.maca.logprob.logp.MacaFusedLogpOp"
+            ),
+            fallback_policy=OperatorFallbackPolicy.ERROR,
+            version_or_build_fingerprint="MacaFusedLogpOp-generic-v1",
+        ),
         OperatorBackendDescriptor(
             semantic_op="selected_logprob",
             backend_id="rlkernel.reference_logp",
@@ -754,6 +781,17 @@ class KernelRegistry:
                 ],
             },
         }
+        # These PyTorch implementations execute on their input tensor's device.
+        self._priority_map["maca"] = {
+            op_type: candidates.copy() for op_type, candidates in self._priority_map["cpu"].items()
+        }
+        self._priority_map["maca"]["det_gemm"] = []
+        for op_type in ("logp", "logp_indexed", "logp_online", "logp_online_indexed"):
+            self._priority_map["maca"][op_type] = [
+                OpBackend.MACA_FUSED_LOGP_GENERIC,
+                OpBackend.PYTORCH_NATIVE,
+            ]
+
         # Preserve the former CPU fallback behavior for every operator on NPU,
         # then override only the operators with an Ascend-specific backend.
         self._priority_map["npu"] = {
@@ -1069,7 +1107,7 @@ class KernelRegistry:
             return self._platform()
         resolved = torch.device(device)
         if resolved.type == "cuda":
-            return "rocm" if torch.version.hip is not None else "cuda"
+            return cuda_platform()
         if resolved.type == "musa":
             return "musa"
         if resolved.type in self._priority_map:
@@ -1327,6 +1365,8 @@ class KernelRegistry:
     def _platform() -> str:
         if device_ctx.is_rocm:
             return "rocm"
+        if device_ctx.device_type == "maca":
+            return "maca"
         if device_ctx.device_type == "cuda":
             return "cuda"
         if device_ctx.device_type == "npu":

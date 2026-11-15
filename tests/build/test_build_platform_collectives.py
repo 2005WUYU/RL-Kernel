@@ -28,6 +28,7 @@ def _load_extension_config(monkeypatch, *, hip: str | None) -> dict[str, Any]:
     monkeypatch.setattr(setuptools, "setup", fake_setup)
     monkeypatch.setattr(cpp_extension, "CUDAExtension", fake_extension)
     monkeypatch.setattr(torch.version, "hip", hip, raising=False)
+    monkeypatch.setattr(torch.version, "maca", None, raising=False)
     monkeypatch.delenv("TORCH_MUSA_ARCH_LIST", raising=False)
     monkeypatch.delenv("FORCE_MUSA", raising=False)
     if hasattr(torch, "musa"):

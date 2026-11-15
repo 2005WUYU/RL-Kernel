@@ -7,6 +7,7 @@ from enum import Enum
 class DeviceType(Enum):
     CUDA = "cuda"  # NVIDIA GPU
     ROCM = "rocm"  # AMD GPU
+    MACA = "maca"  # MetaX GPU; PyTorch exposes the CUDA device API
     MUSA = "musa"  # Moore Threads GPU
     NPU = "npu"  # Huawei Ascend
     TPU = "tpu"  # Google TPU
